@@ -5,7 +5,7 @@
  * Copyright (c) 2009 Pierre-Yves Ritschard <pyr@spootnik.org>
  * Copyright (c) 2010 Tuukka Kataja <stuge@xor.fi>
  * Copyright (c) 2011 Jason L. Wright <jason@thought.net>
- * Copyright (c) 2011-2020 Reginald Kennedy <rk@rejii.com>
+ * Copyright (c) 2011-2021 Reginald Kennedy <rk@rejii.com>
  * Copyright (c) 2011-2012 Lawrence Teo <lteo@lteo.net>
  * Copyright (c) 2011-2012 Tiago Cunha <tcunha@gmx.com>
  * Copyright (c) 2012-2015 David Hill <dhill@mindcry.org>
@@ -302,7 +302,10 @@ uint32_t		swm_debug = 0
 #define SWM_WSI_HIDECURRENT	(0x100)
 #define SWM_WSI_MARKCURRENT	(0x200)
 #define SWM_WSI_MARKURGENT	(0x400)
-#define SWM_WSI_PRINTNAMES	(0x800)
+#define SWM_WSI_MARKACTIVE	(0x800)
+#define SWM_WSI_MARKEMPTY	(0x1000)
+#define SWM_WSI_PRINTNAMES	(0x2000)
+#define SWM_WSI_NOINDEXES	(0x4000)
 #define SWM_WSI_DEFAULT		(SWM_WSI_LISTCURRENT | SWM_WSI_LISTACTIVE |	\
     SWM_WSI_MARKCURRENT | SWM_WSI_PRINTNAMES)
 
@@ -462,6 +465,15 @@ int		num_bg_colors = 1;
 XftColor	search_font_color;
 char		*startup_exception = NULL;
 unsigned int	 nr_exceptions = 0;
+char		*workspace_mark_current = NULL;
+char		*workspace_mark_urgent = NULL;
+char		*workspace_mark_active = NULL;
+char		*workspace_mark_empty = NULL;
+char		*stack_mark_max = NULL;
+char		*stack_mark_vertical = NULL;
+char		*stack_mark_vertical_flip = NULL;
+char		*stack_mark_horizontal = NULL;
+char		*stack_mark_horizontal_flip = NULL;
 
 /* layout manager data */
 struct swm_geometry {
@@ -521,7 +533,6 @@ struct ws_win {
 	int			last_inc;
 	bool			can_delete;
 	bool			take_focus;
-	bool			java;
 	uint32_t		quirks;
 	struct workspace	*ws;	/* always valid */
 	struct swm_screen	*s;	/* always valid, never changes */
@@ -1286,7 +1297,7 @@ void	 raise_window_related(struct ws_win *);
 void	 region_containment(struct ws_win *, struct swm_region *, int);
 struct swm_region	*region_under(struct swm_screen *, int, int);
 void	 regionize(struct ws_win *, int, int);
-void	 reparent_window(struct ws_win *);
+int	 reparent_window(struct ws_win *);
 void	 reparentnotify(xcb_reparent_notify_event_t *);
 void	 resize(struct binding *, struct swm_region *, union arg *);
 void	 resize_win(struct ws_win *, struct binding *, int);
@@ -1355,6 +1366,7 @@ void	 switchlayout(struct binding *, struct swm_region *, union arg *);
 void	 switchws(struct binding *, struct swm_region *, union arg *);
 void	 teardown_ewmh(void);
 void	 unescape_selector(char *);
+char	*unescape_value(const char *);
 void	 unfocus_win(struct ws_win *);
 void	 uniconify(struct binding *, struct swm_region *, union arg *);
 void	 unmanage_window(struct ws_win *);
@@ -2321,12 +2333,14 @@ fancy_stacker(struct workspace *ws)
 void
 plain_stacker(struct workspace *ws)
 {
-	strlcpy(ws->stacker, "[ ]", sizeof ws->stacker);
+	strlcpy(ws->stacker, stack_mark_max, sizeof ws->stacker);
 	if (ws->cur_layout->l_stack == vertical_stack)
-		strlcpy(ws->stacker, ws->l_state.vertical_flip ? "[>]" : "[|]",
+		strlcpy(ws->stacker, ws->l_state.vertical_flip ?
+		    stack_mark_vertical_flip : stack_mark_vertical,
 		    sizeof ws->stacker);
 	else if (ws->cur_layout->l_stack == horizontal_stack)
-		strlcpy(ws->stacker, ws->l_state.horizontal_flip ? "[v]" : "[-]",
+		strlcpy(ws->stacker, ws->l_state.horizontal_flip ?
+		    stack_mark_horizontal_flip : stack_mark_horizontal,
 		    sizeof ws->stacker);
 }
 
@@ -2754,19 +2768,31 @@ bar_workspace_indicator(char *s, size_t sz, struct swm_region *r)
 
 			if (current &&
 			    workspace_indicator & SWM_WSI_MARKCURRENT)
-				mark = "*";
-			else if (urgent && workspace_indicator &
-			    SWM_WSI_MARKURGENT)
-				mark = "!";
+				mark = workspace_mark_current;
+			else if (urgent &&
+			    workspace_indicator & SWM_WSI_MARKURGENT)
+				mark = workspace_mark_urgent;
+			else if (active &&
+			    workspace_indicator & SWM_WSI_MARKACTIVE)
+				mark = workspace_mark_active;
+			else if (!active &&
+			    workspace_indicator & SWM_WSI_MARKEMPTY)
+				mark = workspace_mark_empty;
 			else if (!collapse)
 				mark = " ";
 			else
 				mark = "";
 			strlcat(s, mark, sz);
 
-			if (named && workspace_indicator & SWM_WSI_PRINTNAMES)
+			if (named && workspace_indicator & SWM_WSI_PRINTNAMES) {
 				snprintf(tmp, sizeof tmp, "%d:%s", ws->idx + 1,
 				    ws->name);
+				if (named &&
+				    workspace_indicator & SWM_WSI_NOINDEXES)
+					snprintf(tmp, sizeof tmp, "%s",
+					    ws->name);
+			} else if (workspace_indicator & SWM_WSI_NOINDEXES)
+				snprintf(tmp, sizeof tmp, "%s", " ");
 			else
 				snprintf(tmp, sizeof tmp, "%d", ws->idx + 1);
 			strlcat(s, tmp, sz);
@@ -4757,8 +4783,6 @@ unfocus_win(struct ws_win *win)
 void
 focus_win_input(struct ws_win *win, bool force_input)
 {
-	struct ws_win			*parent = NULL;
-
 	/* Set input focus if no input hint, or indicated by hint. */
 	if (ACCEPTS_FOCUS(win)) {
 		DNPRINTF(SWM_D_FOCUS, "SetInputFocus: %#x, revert-to: "
@@ -4780,14 +4804,8 @@ focus_win_input(struct ws_win *win, bool force_input)
 	}
 
 	/* Tell app it can adjust focus to a specific window. */
-	if (win->take_focus) {
-		/* java is special; always tell parent */
-		if (TRANS(win) && win->java &&
-		    (parent = find_window(win->transient)))
-			client_msg(parent, a_takefocus, last_event_time);
-		else
-			client_msg(win, a_takefocus, last_event_time);
-	}
+	if (win->take_focus)
+		client_msg(win, a_takefocus, last_event_time);
 }
 
 void
@@ -7817,13 +7835,12 @@ update_window(struct ws_win *win)
 	    YESNO(win->bordered));
 	xcb_configure_window(conn, win->id, mask, wc);
 
-	/* ICCCM 4.2.3 Synthetic ConfigureNotify when moved and not resized. */
-	if ((X(win) != win->g_prev.x || Y(win) != win->g_prev.y) &&
-	    (win->java || (WIDTH(win) == win->g_prev.w &&
-	    HEIGHT(win) == win->g_prev.h))) {
-		/* Java has special needs when moved together with a resize. */
-		config_win(win, NULL);
-	}
+	/*
+	 * ICCCM 4.2.3 send a synthetic ConfigureNotify to the window with its
+	 * geometry in root coordinates. It's redundant when a window is
+	 * resized, but Java has special needs...
+	 */
+	config_win(win, NULL);
 
 	win->g_prev = win->g;
 }
@@ -8773,6 +8790,39 @@ argsep(char **sp) {
 	return (arg);
 }
 
+/* Process escape chars in string and return allocated result. */
+char *
+unescape_value(const char *value) {
+	const char		*vp;
+	char			*result, *rp;
+	bool			single_quoted = false, double_quoted = false;
+
+	if (value == NULL)
+		return (NULL);
+
+	result = malloc(strlen(value) + 1);
+	if (result == NULL)
+		err(1, "unescape_value: malloc");
+
+	for (rp = result, vp = value; *vp != '\0'; ++vp) {
+		if (*vp == '\'' && !double_quoted)
+			single_quoted = !single_quoted;
+		else if (*vp == '\"' && !single_quoted)
+			double_quoted = !double_quoted;
+		else if (*vp == '\\' && ((single_quoted && *(vp + 1) == '\'') ||
+		    (double_quoted && *(vp + 1) == '\"') ||
+		    (!single_quoted && !double_quoted)))
+			*rp++ = *(++vp);
+		else
+			*rp++ = *vp;
+	}
+
+	/* Ensure result is terminated. */
+	*rp = '\0';
+
+	return (result);
+}
+
 void
 spawn_insert(const char *name, const char *args, int flags)
 {
@@ -9614,7 +9664,10 @@ struct wsi_flag {
 	{"hidecurrent", SWM_WSI_HIDECURRENT},
 	{"markcurrent", SWM_WSI_MARKCURRENT},
 	{"markurgent", SWM_WSI_MARKURGENT},
+	{"markactive", SWM_WSI_MARKACTIVE},
+	{"markempty", SWM_WSI_MARKEMPTY},
 	{"printnames", SWM_WSI_PRINTNAMES},
+	{"noindexes", SWM_WSI_NOINDEXES},
 };
 
 #define SWM_FLAGS_DELIM		","
@@ -10016,6 +10069,15 @@ enum {
 	SWM_S_WORKSPACE_LIMIT,
 	SWM_S_WORKSPACE_INDICATOR,
 	SWM_S_WORKSPACE_NAME,
+	SWM_S_WORKSPACE_MARK_CURRENT,
+	SWM_S_WORKSPACE_MARK_URGENT,
+	SWM_S_WORKSPACE_MARK_ACTIVE,
+	SWM_S_WORKSPACE_MARK_EMPTY,
+	SWM_S_STACK_MARK_MAX,
+	SWM_S_STACK_MARK_VERTICAL,
+	SWM_S_STACK_MARK_VERTICAL_FLIP,
+	SWM_S_STACK_MARK_HORIZONTAL,
+	SWM_S_STACK_MARK_HORIZONTAL_FLIP,
 };
 
 int
@@ -10312,6 +10374,42 @@ setconfvalue(const char *selector, const char *value, int flags, char **emsg)
 			ewmh_update_desktop_names();
 			ewmh_get_desktop_names();
 		}
+		break;
+	case SWM_S_WORKSPACE_MARK_CURRENT:
+		free(workspace_mark_current);
+		workspace_mark_current = unescape_value(value);
+		break;
+	case SWM_S_WORKSPACE_MARK_URGENT:
+		free(workspace_mark_urgent);
+		workspace_mark_urgent = unescape_value(value);
+		break;
+	case SWM_S_WORKSPACE_MARK_ACTIVE:
+		free(workspace_mark_active);
+		workspace_mark_active = unescape_value(value);
+		break;
+	case SWM_S_WORKSPACE_MARK_EMPTY:
+		free(workspace_mark_empty);
+		workspace_mark_empty = unescape_value(value);
+		break;
+	case SWM_S_STACK_MARK_MAX:
+		free(stack_mark_max);
+		stack_mark_max = unescape_value(value);
+		break;
+	case SWM_S_STACK_MARK_VERTICAL:
+		free(stack_mark_vertical);
+		stack_mark_vertical = unescape_value(value);
+		break;
+	case SWM_S_STACK_MARK_VERTICAL_FLIP:
+		free(stack_mark_vertical_flip);
+		stack_mark_vertical_flip = unescape_value(value);
+		break;
+	case SWM_S_STACK_MARK_HORIZONTAL:
+		free(stack_mark_horizontal);
+		stack_mark_horizontal = unescape_value(value);
+		break;
+	case SWM_S_STACK_MARK_HORIZONTAL_FLIP:
+		free(stack_mark_horizontal_flip);
+		stack_mark_horizontal_flip = unescape_value(value);
 		break;
 	default:
 		ALLOCSTR(emsg, "invalid option");
@@ -10729,6 +10827,15 @@ struct config_option configopt[] = {
 	{ "workspace_limit",		setconfvalue,	SWM_S_WORKSPACE_LIMIT },
 	{ "workspace_indicator",	setconfvalue,	SWM_S_WORKSPACE_INDICATOR },
 	{ "name",			setconfvalue,	SWM_S_WORKSPACE_NAME },
+	{ "workspace_mark_current",	setconfvalue,	SWM_S_WORKSPACE_MARK_CURRENT },
+	{ "workspace_mark_urgent",	setconfvalue,	SWM_S_WORKSPACE_MARK_URGENT },
+	{ "workspace_mark_active",	setconfvalue,	SWM_S_WORKSPACE_MARK_ACTIVE },
+	{ "workspace_mark_empty",	setconfvalue,	SWM_S_WORKSPACE_MARK_EMPTY },
+	{ "stack_mark_max",		setconfvalue,	SWM_S_STACK_MARK_MAX },
+	{ "stack_mark_vertical",	setconfvalue,	SWM_S_STACK_MARK_VERTICAL },
+	{ "stack_mark_vertical_flip",	setconfvalue,	SWM_S_STACK_MARK_VERTICAL_FLIP },
+	{ "stack_mark_horizontal",	setconfvalue,	SWM_S_STACK_MARK_HORIZONTAL },
+	{ "stack_mark_horizontal_flip",	setconfvalue,	SWM_S_STACK_MARK_HORIZONTAL_FLIP },
 };
 
 void
@@ -11005,7 +11112,7 @@ get_ws_idx(struct ws_win *win)
 	return (ws_idx);
 }
 
-void
+int
 reparent_window(struct ws_win *win)
 {
 	xcb_screen_t		*s;
@@ -11046,10 +11153,13 @@ reparent_window(struct ws_win *win)
 		/* Abort. */
 		xcb_destroy_window(conn, win->frame);
 		win->frame = XCB_WINDOW_NONE;
-	} else {
+		win->state = SWM_WIN_STATE_UNPARENTED;
+		unmanage_window(win);
+		return (1);
+	} else
 		xcb_change_save_set(conn, XCB_SET_MODE_INSERT, win->id);
-	}
-	DNPRINTF(SWM_D_MISC, "done\n");
+
+	return (0);
 }
 
 void
@@ -11186,12 +11296,6 @@ manage_window(xcb_window_t id, int spawn_pos, bool mapping)
 	DNPRINTF(SWM_D_CLASS, "class: %s, instance: %s, name: %s\n", class,
 	    instance, name);
 
-	/* java is retarded so treat it special */
-	if (strstr(instance, "sun-awt") || strstr(instance, "jetbrains")) {
-		DNPRINTF(SWM_D_CLASS, "java window detected.\n");
-		win->java = true;
-	}
-
 	TAILQ_FOREACH(qp, &quirks, entry) {
 		if (regexec(&qp->regex_class, class, 0, NULL, 0) == 0 &&
 		    regexec(&qp->regex_instance, instance, 0, NULL, 0) == 0 &&
@@ -11297,12 +11401,15 @@ manage_window(xcb_window_t id, int spawn_pos, bool mapping)
 	/* Set initial _NET_WM_ALLOWED_ACTIONS */
 	ewmh_update_actions(win);
 
-	reparent_window(win);
+	if (reparent_window(win))
+		win = NULL;
 
-	DNPRINTF(SWM_D_MISC, "done. win %#x, (x,y) w x h: (%d,%d) %d x %d, "
-	    "ws: %d, iconic: %s, transient: %#x\n", win->id, X(win), Y(win),
-	    WIDTH(win), HEIGHT(win), win->ws->idx, YESNO(ICONIC(win)),
-	    win->transient);
+	if (win) {
+		DNPRINTF(SWM_D_MISC, "done. win %#x, (x,y) w x h: (%d,%d) %d x %d, "
+		    "ws: %d, iconic: %s, transient: %#x\n", win->id, X(win), Y(win),
+		    WIDTH(win), HEIGHT(win), win->ws->idx, YESNO(ICONIC(win)),
+		    win->transient);
+	}
 out:
 	free(war);
 	return (win);
@@ -11334,7 +11441,10 @@ unmanage_window(struct ws_win *win)
 		return;
 
 	kill_refs(win);
-	unparent_window(win);
+
+	if (win->state != SWM_WIN_STATE_UNPARENTED &&
+	    win->state != SWM_WIN_STATE_UNPARENTING)
+		unparent_window(win);
 
 	TAILQ_REMOVE(&win->ws->stack, win, stack_entry);
 	TAILQ_REMOVE(&win->ws->winlist, win, entry);
@@ -13310,8 +13420,35 @@ setup_globals(void)
 	if ((clock_format = strdup("%a %b %d %R %Z %Y")) == NULL)
 		err(1, "clock_format: strdup");
 
+	if ((stack_mark_max = strdup("[ ]")) == NULL)
+		err(1, "stack_mark_max: strdup");
+
+	if ((stack_mark_vertical = strdup("[|]")) == NULL)
+		err(1, "stack_mark_vertical: strdup");
+
+	if ((stack_mark_vertical_flip = strdup("[>]")) == NULL)
+		err(1, "stack_mark_vertical_flip: strdup");
+
+	if ((stack_mark_horizontal = strdup("[-]")) == NULL)
+		err(1, "stack_mark_horizontal: strdup");
+
+	if ((stack_mark_horizontal_flip = strdup("[v]")) == NULL)
+		err(1, "stack_mark_horizontal_flip: strdup");
+
 	if ((syms = xcb_key_symbols_alloc(conn)) == NULL)
 		errx(1, "unable to allocate key symbols.");
+
+	if ((workspace_mark_current = strdup("*")) == NULL)
+		err(1, "workspace_mark_current: strdup");
+
+	if ((workspace_mark_urgent = strdup("!")) == NULL)
+		err(1, "workspace_mark_urgent: strdup");
+
+	if ((workspace_mark_active = strdup("^")) == NULL)
+		err(1, "workspace_mark_active: strdup");
+
+	if ((workspace_mark_empty = strdup("-")) == NULL)
+		err(1, "workspace_mark_empty: strdup");
 
 	a_state = get_atom_from_string("WM_STATE");
 	a_prot = get_atom_from_string("WM_PROTOCOLS");
@@ -13496,6 +13633,15 @@ shutdown_cleanup(void)
 	free(bar_fonts);
 	free(clock_format);
 	free(startup_exception);
+	free(stack_mark_max);
+	free(stack_mark_vertical);
+	free(stack_mark_vertical_flip);
+	free(stack_mark_horizontal);
+	free(stack_mark_horizontal_flip);
+	free(workspace_mark_current);
+	free(workspace_mark_urgent);
+	free(workspace_mark_active);
+	free(workspace_mark_empty);
 
 	if (bar_fs)
 		XFreeFontSet(display, bar_fs);
@@ -13628,7 +13774,7 @@ main(int argc, char *argv[])
 	if (setlocale(LC_CTYPE, "") == NULL || setlocale(LC_TIME, "") == NULL)
 		warnx("no locale support");
 
-	if (pledge("stdio proc exec rpath getpw dns inet unix", NULL) == -1)
+	if (pledge("stdio proc exec rpath getpw dns inet unix wpath", NULL) == -1)
 		err(1, "pledge");
 
 	/* handle some signals */
@@ -13648,7 +13794,7 @@ main(int argc, char *argv[])
 	if ((display = XOpenDisplay(0)) == NULL)
 		errx(1, "unable to open display");
 
-	if (pledge("stdio proc exec rpath getpw", NULL) == -1)
+	if (pledge("stdio proc exec rpath getpw wpath", NULL) == -1)
 		err(1, "pledge");
 
 	conn = XGetXCBConnection(display);
@@ -13703,7 +13849,7 @@ main(int argc, char *argv[])
 	else
 		scan_config();
 
-	if (pledge("stdio proc exec rpath", NULL) == -1)
+	if (pledge("stdio proc exec rpath wpath", NULL) == -1)
 		err(1, "pledge");
 
 	validate_spawns();

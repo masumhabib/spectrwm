@@ -116,6 +116,11 @@ Colors need to be specified per the
 .Xr XQueryColor 3
 specification.
 .Pp
+Mark option values may be wrapped in single/double quotes to prevent
+whitespace trimming, specify empty strings, etc.
+Literal quote/backslash characters can be escaped with backslash '\e',
+when needed.
+.Pp
 Comments begin with a #.
 When a literal
 .Ql #
@@ -568,6 +573,41 @@ and
 are relative to the focused window.
 .It Ic stack_enabled
 Enable or disable displaying the current stacking algorithm in the status bar.
+.It Ic stack_mark_horizontal
+Set the
+.Ar horizontal
+layout mark for the
+.Ic bar_format
+stacking indicator (+S).
+Default is '[-]'.
+.It Ic stack_mark_horizontal_flip
+Set the
+.Ar horizontal_flip
+layout mark for the
+.Ic bar_format
+stacking indicator (+S).
+Default is '[v]'.
+.It Ic stack_mark_max
+Set the
+.Ar max
+layout mark for the
+.Ic bar_format
+stacking indicator (+S).
+Default is '[ ]'.
+.It Ic stack_mark_vertical
+Set the
+.Ar vertical
+layout mark for the
+.Ic bar_format
+stacking indicator (+S).
+Default is '[|]'.
+.It Ic stack_mark_vertical_flip
+Set the
+.Ar vertical_flip
+layout mark for the
+.Ic bar_format
+stacking indicator (+S).
+Default is '[>]'.
 .It Ic term_width
 Set a preferred minimum width for the terminal.
 If this value is greater than 0,
@@ -679,14 +719,36 @@ Include all workspaces.
 Always exclude the current workspace from the list.
 .It Ar markcurrent
 Indicate the current workspace if it is in the list.
+.It Ar markactive
+Indicate workspaces in the list that are active.
+.It Ar markempty
+Indicate workspaces in the list that are empty.
 .It Ar markurgent
 Indicate workspaces in the list that contain urgent window(s).
 .It Ar printnames
 Display the names of named workspaces in the list.
+.It Ar noindexes
+Hide the index of the workspaces.
 .El
 .Pp
 The default is
 .Ar listcurrent , Ns Ar listactive , Ns Ar markcurrent , Ns Ar printnames
+.It Ic workspace_mark_active
+Set the 'active workspace' mark used in the
+.Ic workspace_indicator .
+Default is '^'.
+.It Ic workspace_mark_current
+Set the 'current workspace' mark used in the
+.Ic workspace_indicator .
+Default is '*'.
+.It Ic workspace_mark_empty
+Set the 'empty workspace' mark used in the
+.Ic workspace_indicator .
+Default is '-'.
+.It Ic workspace_mark_urgent
+Set the 'urgent workspace' mark used in the
+.Ic workspace_indicator .
+Default is '!'.
 .It Ic workspace_limit
 Set the total number of workspaces available.
 Minimum is 1, maximum is 22, default is 10.
@@ -1161,7 +1223,7 @@ Custom bindings in the configuration file are specified as follows:
 is one of the actions listed above (or empty to unbind) and
 .Ar combo
 is in the form of zero or more modifier keys and/or special arguments
-(Mod1, Shift, MOD, etc.) and a normal key (b, Space, etc)
+(Mod1, Shift, Control, MOD, etc.) and a normal key (b, Space, etc)
 or a button (Button1 .. Button255), separated by
 .Ql + .
 Multiple key/button combinations may be bound to the same action.
